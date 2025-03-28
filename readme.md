@@ -6,11 +6,13 @@ This module provides a client for easy access to the [Foundry DevTools Container
 
 ## Installation
 
-For proper IDE intellisense support (e.g., PyLance), you'll need to ensure the module can be imported statically without sys path manipulations. Since Python module names cannot contain dashes, use this approach:
+For proper IDE intellisense support (e.g., PyLance), you'll need to ensure the module can be imported statically without sys path manipulations. Since Python module names cannot contain dashes, make sure to rename the folder when cloning:
 
 ```bash
-git clone https://github.com/t3lls/foundry-dev-tools-container-client foundry_dev_tools_container_client
+git clone https://github.com/t3llscode/foundry-dev-tools-container-client foundry_dev_tools_container_client
 ```
+
+After cloning the repository, you can import the similar to this:
 
 ```python
 from foundry_dev_tools_container_client.t3_code.FoundryDevToolsContainerClient import FoundryDevToolsContainerClient as FDTCC
@@ -70,8 +72,8 @@ You can freely set functions for logging and response handling. If you dont choo
 from fastapi import WebSocket
 import json
 
-# you might need to do it like this, as there are dashs in the module name
-FDTCC = __import__('modules.foundry-dev-tools-container-client.t3_code.FoundryDevToolsContainerClient', fromlist=['FoundryDevToolsContainerClient']).FoundryDevToolsContainerClient
+# make sure to clone the repository to a folder without dashes
+from foundry_dev_tools_container_client.t3_code.FoundryDevToolsContainerClient import FoundryDevToolsContainerClient as FDTCC
 
 # - - - INITIALIZE CUSTOM FUNCTIONS AND CLIENT - - -
 
