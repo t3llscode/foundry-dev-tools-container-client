@@ -19,7 +19,7 @@ class Schedule:
             "day": 1,  # Day of the month to refresh
             "time": "02:00:00"
         },{
-            "type": "weekly",
+            "cycle": "weekly",
             "day": "Monday",  # Weekday to refresh on
             "time": "02:00:00"
         }],
@@ -157,7 +157,7 @@ class Refresh:
         Returns:
             Latest refresh datetime
         """
-        refresh_datetimes = self.get_refresh_datetimes(from_dt=date - timedelta(days=30), to_dt=date)
+        refresh_datetimes = self.get_refresh_datetimes(date)
         
         # Return the most recent refresh time before now
         return max(filter(lambda dt: dt <= date, refresh_datetimes))
@@ -173,7 +173,7 @@ class Refresh:
         Returns:
             Next refresh datetime
         """
-        refresh_datetimes = self.get_refresh_datetimes(from_dt=date, to_dt=date + timedelta(days=30))
+        refresh_datetimes = self.get_refresh_datetimes(date)
         
         # Return the next refresh time after now
         return min(filter(lambda dt: dt > date, refresh_datetimes))
@@ -272,5 +272,9 @@ class Refresh:
         Returns:
             The number of days in the month
         """
-        next_month = date.replace(day=1) + timedelta(months=1)
+        if date.month != 12:
+            next_month = date.replace(month=date.month + 1, day=1)
+        else:
+            next_month = date.replace(year=date.year + 1, month=1, day=1)
+        
         return (next_month - timedelta(days=1)).day
