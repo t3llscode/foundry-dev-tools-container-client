@@ -1,9 +1,12 @@
 from fastapi import WebSocket
 from datetime import datetime
+import polars as pl
 import websockets
 import json
+import io
 
 from .Schedule import Schedule
+import aiohttp
 
 # Module by https://t3l.ls
 # Universal Excel Formatter
@@ -15,6 +18,7 @@ class FoundryDevToolsContainerClient:
         # TODO: implement log_func
 
         self.url_base = f"ws://{host}:{port}/dataset"
+        self.download_url = f"http://{host}:{port}/dataset/download"
 
         self.log = log
         self.log_func = FoundryDevToolsContainerClient.default_logger if log_func is ... else log_func
@@ -66,12 +70,11 @@ class FoundryDevToolsContainerClient:
         name: str,
         from_dt: datetime,
         to_dt: datetime,
-        response_func: callable = ...
-    ) -> tuple[dict[str, str], bool]:
+        response_func: callable = ...,
+        use_zip: bool = False
+    ) -> tuple[str, bool]:
         try:
-            print(response_func is ..., flush=True)
             response_func = FoundryDevToolsContainerClient.default_send_message if response_func is ... else response_func
-            print(response_func, flush=True)
 
             async with websockets.connect(f"{self.url_base}/get") as inner_ws: 
                 await self.log_func(self, "Connected to WebSocket")
@@ -81,25 +84,57 @@ class FoundryDevToolsContainerClient:
                 await inner_ws.send(json.dumps(initial_request))
                 await self.log_func(self, f"Sent initial request: {initial_request}")
 
+                print("INHH", flush=True)
+
                 # Listen for responses
                 async for message in inner_ws:
                     response = json.loads(message)
                     await self.log_func(self, f"Received: {response}")
 
+                    print("RESPONSE", response, flush=True)
+
+                    # type final marks the last message in the stream
+                    if response.get("type") == "final":
+                        sha256 = response["datasets"]
+                        inner_ws.close()
+                        print("CLOSED CONNECTION AS FINAL IS RECEIVED", flush=True)
+                        return await self.download(sha256, use_zip)
+                    
                     # proxy the reponse to the outer_ws
                     if response_func:
                         await response_func(self, outer_ws, response)
 
-                    # type final marks the last message in the stream
-                    if response.get("type") == "final":
-                        return response, True
-                
         except Exception as e:
             await self.log_func(self, f"Error: {e}")
             return {}, False
-
+    
 
     # - - - Default Functions - - -
+
+    async def download(self, sha256: str, use_zip: bool = False):
+
+        if use_zip:
+            pass  # TODO: Implement use_zip
+        else:
+            url = f"{self.download_url}/csv/{sha256}"
+            async with aiohttp.ClientSession() as session:
+                try:
+                    async with session.get(url) as response:
+                        response.raise_for_status()
+                        csv_data = await response.read()
+                        polars_df = pl.read_csv(
+                            io.BytesIO(csv_data),
+                            schema_overrides={"productgroup__code": pl.String}
+                        )
+                        
+                        await self.log_func(self, f"Downloaded and parsed {url}")
+                        return polars_df, True
+                
+                except Exception as e:
+                    await self.log_func(self, f"Error downloading from {url}: {e}")
+                    return "Failed", False
+
+    # - - - Static Default Functions - - -
 
     @staticmethod  # never called from the object, self will always be provided as the first argument
     async def default_send_message(self, outer_ws: WebSocket, message: dict):
@@ -121,4 +156,4 @@ class FoundryDevToolsContainerClient:
     async def default_logger(self, message: str):
         """ Default logger function that prints messages to the console if log is enabled. """
         if self.log:
-            print(f"Log: {message}")
+            print(f"Log: {message}", flush=True)
