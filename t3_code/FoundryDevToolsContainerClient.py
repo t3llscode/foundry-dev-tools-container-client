@@ -17,8 +17,8 @@ class FoundryDevToolsContainerClient:
         # TODO: in the future might also support http/s protocol
         # TODO: implement log_func
 
-        self.url_base = f"ws://{host}:{port}/dataset"
-        self.download_url = f"http://{host}:{port}/dataset/download"
+        self.url_base = f"ws://{host}:{port}/fdtc-api/dataset"
+        self.download_url = f"http://{host}:{port}/fdtc-api/dataset/download"
 
         self.log = log
         self.log_func = FoundryDevToolsContainerClient.default_logger if log_func is ... else log_func
@@ -71,6 +71,7 @@ class FoundryDevToolsContainerClient:
         from_dt: datetime,
         to_dt: datetime,
         response_func: callable = ...,
+        schema_overwrite: dict = ...,
         use_zip: bool = False
     ) -> tuple[str, bool]:
         try:
@@ -96,9 +97,9 @@ class FoundryDevToolsContainerClient:
                     # type final marks the last message in the stream
                     if response.get("type") == "final":
                         sha256 = response["datasets"]
-                        inner_ws.close()
+                        await inner_ws.close()
                         print("CLOSED CONNECTION AS FINAL IS RECEIVED", flush=True)
-                        return await self.download(sha256, use_zip)
+                        return await self.download(sha256, schema_overwrite, use_zip)
                     
                     # proxy the reponse to the outer_ws
                     if response_func:
@@ -111,7 +112,7 @@ class FoundryDevToolsContainerClient:
 
     # - - - Default Functions - - -
 
-    async def download(self, sha256: str, use_zip: bool = False):
+    async def download(self, sha256: str, schema_overwrite: dict, use_zip: bool = False):
 
         if use_zip:
             pass  # TODO: Implement use_zip
@@ -122,13 +123,13 @@ class FoundryDevToolsContainerClient:
                     async with session.get(url) as response:
                         response.raise_for_status()
                         csv_data = await response.read()
+                        schema_overwrite = {} if schema_overwrite == ... else schema_overwrite
                         polars_df = pl.read_csv(
                             io.BytesIO(csv_data),
-                            schema_overrides={"productgroup__code": pl.String}
+                            schema_overrides=schema_overwrite
                         )
-                        
-                        await self.log_func(self, f"Downloaded and parsed {url}")
-                        return polars_df, True
+                    await self.log_func(self, f"Downloaded and parsed {url}")
+                    return polars_df, True
                 
                 except Exception as e:
                     await self.log_func(self, f"Error downloading from {url}: {e}")
