@@ -1,0 +1,17 @@
+[project]
+name = "foundry-dev-tools-container-client"
+version = "0.1.0"
+description = "Client for foundry-dev-tools-container"
+authors = [
+    { name = "Tell Hensel", email = "tell@t3lls.com" }
+]
+readme = "readme.md"
+requires-python = ">=3.8"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["foundry_dev_tools_container_client*"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
