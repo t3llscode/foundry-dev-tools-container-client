@@ -2,6 +2,7 @@ from fastapi import WebSocket
 from datetime import datetime
 import polars as pl
 import websockets
+import traceback
 import json
 import io
 
@@ -106,6 +107,7 @@ class FoundryDevToolsContainerClient:
                         await response_func(self, outer_ws, response)
 
         except Exception as e:
+            traceback.print_exc()
             await self.log_func(self, f"Error: {e}")
             return {}, False
     
