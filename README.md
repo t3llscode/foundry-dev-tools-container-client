@@ -2,12 +2,11 @@
 
 This module provides a client for easy access to the [Foundry DevTools Container Service](https://github.com/t3llscode/foundry-dev-tools-container).
 
-> **Note:** Throughout this documentation, `FDTCC` is used as a short name for `FoundryDevToolsContainerClient` for brevity.
+> **Note:** Throughout this documentation, `FDTCC` references the `FoundryDevToolsContainerClient` class for brevity.
 
 ## Installation
 
-
-You can install the module directly from the repository with pip:
+Install directly from GitHub:
 
 ```bash
 pip install git+https://github.com/t3llscode/foundry-dev-tools-container-client.git
@@ -30,109 +29,170 @@ from foundry_dev_tools_container_client import FoundryDevToolsContainerClient as
 
 ## Overview
 
-The `FoundryDevToolsContainerClient` is a WebSocket-based client that facilitates communication with the [Foundry DevTools Container Service](https://github.com/t3llscode/foundry-dev-tools-container). It provides an asynchronous interface for retrieving datasets from Foundry and streaming the results back through WebSocket connections.
+`FoundryDevToolsContainerClient` offers an async WebSocket bridge to the Foundry DevTools Container Service. Beyond streaming datasets, the client now includes:
 
-### Key Features
+- **Incremental download helpers** via `get_single()` and `download()` returning Polars DataFrames.
+- **Schedule-aware pull windows** using the bundled `Schedule` and `Refresh` classes for repeatable ingestion windows.
+- **Pluggable logging/response hooks** so you can proxy messages to any outer socket or monitoring backend.
 
-- **Asynchronous WebSocket Communication**: Built on top of `websockets` and `fastapi.WebSocket` for real-time data streaming
-- **Flexible Response Handling**: Customizable response and logging functions to fit your application's needs
-- **Proxy Pattern**: Acts as a bridge between your outer WebSocket connection and the [Foundry DevTools Container Service](https://github.com/t3llscode/foundry-dev-tools-container)
-- **Error Handling**: Built-in error handling with customizable logging
+## Core API
 
-## Functions and Parameters
+### `FDTCC(host="project-fdt-container", port=8000, log=False, log_func=...)`
 
-### FDTCC()
+| Parameter | Type | Purpose | Default |
+|-----------|------|---------|---------|
+| `host` | `str` | Hostname of the service | `project-fdt-container` |
+| `port` | `int` | Exposed service port | `8000` |
+| `log` | `bool` | Toggle default logging | `False` |
+| `log_func` | `callable` | Async logger `(self, message)` | `default_logger` |
 
-Arguments:
+### `await FDTCC.get(outer_ws, names, response_func=...)`
 
-| Parameter | Type | Description | Default |
-|-----------|------|-------------|---------|
-| `host` | `str` | The hostname of the Foundry DevTools Container Service | `"project-fdt-container"` |
-| `port` | `int` | The port number of the service | `8000` |
-| `log` | `bool` | Enable/disable logging | `False` |
-| `log_func` | `callable` | Custom logging function, receives `(self, message)` as arguments | `FDTCC.default_logger` |
+Streams one or more dataset names through the container. Each inbound message is forwarded to `response_func(self, outer_ws, message)` (defaults to `default_send_message`). When the inner service emits `type="final"` the method returns.
 
-### FDTCC.get()
+### `await FDTCC.get_single(outer_ws, name, from_dt, to_dt, response_func=..., schema_overwrite=..., use_zip=False)`
 
-Arguments:
+Retrieves a single dataset slice defined by an ISO timestamp window. The method:
 
-| Parameter | Type | Description | Default |
-|-----------|------|-------------|---------|
-| `outer_ws` | `WebSocket` | The outer WebSocket connection to your client | - |
-| `names` | `str \| list[str]` | The dataset name(s) to request from Foundry | - |
-| `response_func` | `callable` | Custom function to handle responses, receives `(self, outer_ws, message)` as arguments | `FDTCC.default_send_message` |
+1. Streams job status to `response_func` just like `get()`.
+2. On `type="final"`, calls `download()` with the emitted SHA256 pointer.
+3. Returns `(polars.DataFrame, bool)` where the boolean indicates download success.
 
-Returns:
+Use `schema_overwrite` to pass a `dict[column]=dtype` map for Polars parsing. `use_zip` is reserved for a future compressed transport.
 
-| Return Type | Description |
-|-------------|-------------|
-| `dict[str, str]` | A dictionary mapping dataset names to their corresponding CSV data |
-| During execution | Streams responses through the provided `response_func` |
+### `await FDTCC.download(sha256, schema_overwrite=..., use_zip=False)`
 
-## Usage Example
+Performs a blocking HTTP download of the generated CSV and parses it with Polars. Any schema overrides are forwarded to `pl.read_csv`. On failure, the tuple `("Failed", False)` is returned.
 
-You can freely set functions for logging and response handling. If you dont choose any there are default functions which will be used. The client will call these functions with the following arguments:
+### `Schedule` and `Refresh`
 
-- <b>log_func</b>: ```(self: <FoundryDevToolsContainerClient>, message: str)```
-- <b>response_func</b>: ```(self: <FoundryDevToolsContainerClient>, outer_ws: <fastapi.WebSocket>, message: str)```
+The helper classes in `Schedule.py` describe when a dataset refreshes so you can build the `from_dt`/`to_dt` window automatically.
+
+```python
+from datetime import timedelta
+from foundry_dev_tools_container_client import Schedule
+
+schedule = Schedule([
+    {"cycle": "monthly", "day": 1, "time": "02:00:00"},
+    {"cycle": "weekly", "day": "Monday", "time": "02:00:00"}
+], buffer=timedelta(minutes=60))
+
+last_pull = schedule.get_latest_refresh()      # includes buffer
+next_pull = schedule.get_next_refresh()
+```
+
+`Schedule` stores multiple `Refresh` rules, validates them, and exposes `get_latest_refresh()` / `get_next_refresh()` helpers so your ingestion only touches new rows.
+
+#### Building schedules with every supported cycle
+
+Currently two cycle types are supported—`"monthly"` and `"weekly"`. You can combine as many refresh rules as you want per dataset:
+
+```python
+from datetime import timedelta
+from foundry_dev_tools_container_client import Schedule
+
+dataset_schedules = {
+    # Refresh on the 1st of every month at 02:00 UTC
+    "foundry.financials.month_start": Schedule([
+        {"cycle": "monthly", "day": 1, "time": "02:00:00"}
+    ], buffer=timedelta(minutes=30)),
+
+    # Refresh every Monday (weekly accepts weekday names, case-insensitive)
+    "foundry.support.weekly_snapshot": Schedule([
+        {"cycle": "weekly", "day": "Monday", "time": "04:30:00"}
+    ]),
+
+    # Multiple rules: first business day + last calendar day by using negative indices
+    "foundry.hr.monthly_closings": Schedule([
+        {"cycle": "monthly", "day": 1, "time": "06:00:00"},      # first day
+        {"cycle": "monthly", "day": -1, "time": "22:00:00"},     # last day (use -1)
+        {"cycle": "weekly", "day": "Friday", "time": "08:00:00"} # weekly QA pull
+    ], buffer=timedelta(hours=2))
+}
+
+# Accessing a schedule
+finance_schedule = dataset_schedules["foundry.financials.month_start"]
+latest = finance_schedule.get_latest_refresh()
+next_up = finance_schedule.get_next_refresh()
+```
+
+Rules recap:
+
+- `monthly`: `day` is an integer (1–31) or a negative integer (-1 = last day, -2 = second to last, ...).
+- `weekly`: `day` is a weekday string (Monday–Sunday).
+- `time`: always `HH:MM:SS` in 24h UTC.
+- `buffer` (optional): `timedelta` that shifts the calculated timestamps forward, handy when the source system needs extra processing time.
+
+## Usage Examples
+
+### Streaming multiple datasets
 
 ```python
 from fastapi import WebSocket
 import json
 
-# make sure to clone the repository to a folder without dashes
 from foundry_dev_tools_container_client import FoundryDevToolsContainerClient as FDTCC
-
-# - - - INITIALIZE CUSTOM FUNCTIONS AND CLIENT - - -
 
 def custom_log(self: FDTCC, message: str):
     if self.log:
         print(f"Custom Log - {self.host}:{self.port} - {message}")
 
 async def custom_response(self: FDTCC, outer_ws: WebSocket, message: str):
-    try:
-        await outer_ws.send(json.dumps(message))
-        self.log_func(self, f"Sent message: {message}")
-    except Exception as e:
-        self.log_func(self, f"Error sending message: {e}")
+    await outer_ws.send_json(message)
+    await self.log_func(self, f"Sent message: {message}")
 
-fdtcc_client = FDTCC(
-    # protocol - may be added in the future, currently only supporting ws
-    host = "project-fdt-container",
-    port = 8000,
-    log = True,
-    log_func = custom_log,  # Custom logging function
-)
-
-# - - - OUTER WEBSOCKET CALL - - -
+fdtcc_client = FDTCC(host="project-fdt-container", port=8000, log=True, log_func=custom_log)
 
 @router.websocket("/insert_dataset")
 async def insert_dataset(outer_ws: WebSocket):
-    try:
-        await outer_ws.accept()
+    await outer_ws.accept()
+    payload = await outer_ws.receive_json()
+    names = payload.get("names", [])
+    await fdtcc_client.get(outer_ws, names, custom_response)
+```
 
-        initial_req = await outer_ws.receive_json()
-        names = initial_req.get("names", [])
+### Incremental download with `Schedule`
 
-        # This will retrieve the dataset and forward all messages to the outer_ws
-        dataset_info = fdtcc_client.get(outer_ws, names, custom_response)
+```python
+from datetime import datetime
+from fastapi import WebSocket
+from foundry_dev_tools_container_client import FoundryDevToolsContainerClient as FDTCC, Schedule
 
-        for df_name, df in dataset_info.items():
-            print(f"DataFrame Name: {df_name}")
-            print(f"DataFrame Content: {df}")
+schedule = Schedule([
+    {"cycle": "weekly", "day": "Monday", "time": "02:00:00"}
+])
 
-        # INSERT THE DATASETS HERE #
+fdtcc_client = FDTCC(log=True)
 
-    except Exception as e:
-        fdtcc_client.log_func(fdtcc_client, f"Error in WebSocket: {e}")
+@router.websocket("/pull_dataset")
+async def pull_dataset(ws: WebSocket):
+    await ws.accept()
+
+    end = schedule.get_next_refresh()
+    start = schedule.get_latest_refresh()
+
+    df, ok = await fdtcc_client.get_single(
+        ws,
+        name="foundry.my_dataset",
+        from_dt=start,
+        to_dt=end,
+    )
+
+    if ok:
+        # df is a polars.DataFrame
+        await ws.send_json({"message": f"Received {df.height} rows"})
+    else:
+        await ws.send_json({"error": "Download failed"})
 ```
 
 ## Requirements
 
-- Python 3.x
-- fastapi
+- Python 3.10+
+- fastapi (outer WebSocket contracts)
 - websockets
-- json
+- polars
+- aiohttp
+- pytz
 
 ---
 

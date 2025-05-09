@@ -40,7 +40,14 @@ class FoundryDevToolsContainerClient:
         try:
             response_func = FoundryDevToolsContainerClient.default_send_message if response_func is ... else response_func
 
-            async with websockets.connect(f"{self.url_base}/get") as inner_ws: 
+            async with websockets.connect(
+                f"{self.url_base}/get",
+                ping_interval=None,  # Disable automatic pings
+                ping_timeout=None,   # Disable ping timeout
+                close_timeout=None,  # No timeout for closing connection
+                max_size=None,       # No limit on message size
+                open_timeout=None    # No timeout for opening connection
+            ) as inner_ws: 
                 self.log_func(self, "Connected to WebSocket")
 
                 # Send initial request with DATASET_NAMES
@@ -61,6 +68,8 @@ class FoundryDevToolsContainerClient:
                     if response.get("type") == "final":
                         break
                 
+        except websockets.exceptions.ConnectionClosedError as e:
+            self.log_func(self, f"WebSocket connection closed unexpectedly: {e}")
         except Exception as e:
             self.log_func(self, f"Error: {e}")
 
@@ -78,15 +87,20 @@ class FoundryDevToolsContainerClient:
         try:
             response_func = FoundryDevToolsContainerClient.default_send_message if response_func is ... else response_func
 
-            async with websockets.connect(f"{self.url_base}/get") as inner_ws: 
+            async with websockets.connect(
+                f"{self.url_base}/get",
+                ping_interval=None,  # Disable automatic pings
+                ping_timeout=None,   # Disable ping timeout
+                close_timeout=None,  # No timeout for closing connection
+                max_size=None,       # No limit on message size
+                open_timeout=None    # No timeout for opening connection
+            ) as inner_ws: 
                 await self.log_func(self, "Connected to WebSocket")
 
                 # Send initial request with DATASET_NAMES
                 initial_request = {"names": [name], "from_dt": from_dt.isoformat(), "to_dt": to_dt.isoformat()}
                 await inner_ws.send(json.dumps(initial_request))
                 await self.log_func(self, f"Sent initial request: {initial_request}")
-
-                print("INHH", flush=True)
 
                 # Listen for responses
                 async for message in inner_ws:
@@ -105,10 +119,15 @@ class FoundryDevToolsContainerClient:
                     # proxy the reponse to the outer_ws
                     if response_func:
                         await response_func(self, outer_ws, response)
+                
+        except websockets.exceptions.ConnectionClosedError:
+            traceback.print_exc()
+            await self.log_func(self, "Server closed connection unexpectedly")
+            return {}, False
 
         except Exception as e:
             traceback.print_exc()
-            await self.log_func(self, f"Error: {e}")
+            await self.log_func(self, f"get_single() Error: {e}")
             return {}, False
     
 
@@ -120,7 +139,14 @@ class FoundryDevToolsContainerClient:
             pass  # TODO: Implement use_zip
         else:
             url = f"{self.download_url}/csv/{sha256}"
-            async with aiohttp.ClientSession() as session:
+            # Create timeout settings with no limits
+            timeout = aiohttp.ClientTimeout(
+                total=None,      # No total timeout
+                connect=None,    # No connection timeout
+                sock_connect=None,  # No socket connection timeout
+                sock_read=None   # No socket read timeout
+            )
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 try:
                     async with session.get(url) as response:
                         response.raise_for_status()
